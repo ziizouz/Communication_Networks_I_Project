@@ -4,6 +4,7 @@ import socket 		# To manage sockets
 import sys 			# To extract command line arguments
 import ipaddress 	# To check the validaty of the TCP_IP address entered
 import secrets		#  for generating cryptographically strong random numbers
+import struct 		# Used to pack and unpack messages in the UDP protocol
 
 '''
 generate_keys function
@@ -91,6 +92,69 @@ def udp_packet_content_padding(udp_packet_content):
 	return udp_packet_content
 
 '''
+udp_packet_constructor function
+Arguments:
+	CID, ACK, EOM, data_remaining, content: As specified in lab instructions
+Return:
+	packet: (binaary) ready packet to be sent to the server
+This function construct the packet to be sent to the server
+it has the form specified in the UDP protocol section of the lab instructions
+CID | ACK | EOM | Data remaining | Content length | Content
+'''
+def udp_packet_constructor(CID, ACK=True, EOM=False, data_remaining=0, content_length=0, content="Hello from "):
+	# First, we need to convert the string to bytes. (struct.pack packs bytes only not strings !) 
+	content = bytes(content, 'utf-8')
+	CID = bytes(CID, 'utf-8')
+	
+	# Check source: https://docs.python.org/3/library/struct.html#format-characters
+	# struct.pack format explain:
+	# ! => big-ending; 	%ds => string with lenght :len(CID) / 64
+	# ? => boolean; 	H => unsigned short
+
+	packet = struct.pack('!%ds??HH%ds' % (len(CID), 64),
+				CID, ACK, EOM, data_remaining, content_length, content)
+
+	return packet
+
+'''
+udp_packet_unpack function
+Arguments:
+	packet: (bytes) packet received from server on the UDP socket
+return:
+	data: (list) if containts:
+	CID (str) | ACK (bool)| EOM (bool)| Data remaining (int) | Content length (int)| Content (string)
+udp_packet_unpack function is used to unpack the UDP packet received from the server
+Note that the returned content is padded with null bytes !!!
+'''
+def udp_packet_unpack(packet, id_length=8, content_len=64):
+	# struct.unpack returns a tuple. I casted it to list !
+	CID, ACK, EOM, data_remaining, content_length, content = \
+				list(struct.unpack('!%ds??HH%ds' % (id_length, content_len), packet))
+	# Decode the CID and content from bytes to string before returning them
+	CID  = CID.decode('utf-8')
+	content = content.decode('utf-8')
+	return CID, ACK, EOM, data_remaining, content_length, content
+
+'''
+reverse_order function
+Argument:
+	words: (string) sequence of words to reverse their order. No null bytes at the end are expected !
+return:
+	reversed_words: (string) the initial words but in reverse order
+This funtion is used to reverse the order of the words received from 
+the server to resend them back
+'''
+def reverse_order(words):
+	# Extract the words
+	list_words = words.split(' ')
+	# Reverse the order of the list
+	list_words.reverse()
+	# Joining the reversed list into a final string
+	reversed_words = ' '.join(list_words)
+
+	return reversed_words
+
+'''
 encrypt function
 Arguments:
 	content: (string) udp packet content to encrypt
@@ -128,9 +192,6 @@ def decrypt(cypher, key):
 
 	return plain_text
 
-def udp_messaging():
-	pass
-
 '''
 tcp_connect function
 Arguments:
@@ -159,8 +220,25 @@ def tcp_connect(TCP_IP, TCP_PORT, MESSAGE):
 	# returning what the server says !
 	return data
 
-def udp_connection(parameters):
-	pass
+def udp_connect(UDP_IP, UDP_PORT, packet):
+	BUFFER_SIZE = 1024
+	# Initiate UDP socket
+	clientSock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+	# Sending message to the server using UDP protocol
+	clientSock.sendto(packet, (UDP_IP, UDP_PORT))
+
+	# bind IP address and port number to server 
+	#clientSock.bind((UDP_IP, UDP_PORT))
+
+	# Waiting to receive response from the server
+	while True:
+		data, _ = clientSock.recvfrom(BUFFER_SIZE)
+		if data:
+			break
+
+	clientSock.close()
+	return data
 
 '''
 main funtion
@@ -212,7 +290,7 @@ def main():
 		else:
 			print('Please enter a valid entry !')
 
-	## The TCP protocol implemenation
+	## The TCP/IP protocol implementation
 	'''
 	In this section, the program will negociate the features to use with the server
 	And it will get the client's identification token and UDP port
@@ -253,30 +331,59 @@ def main():
 		# Extract cliend id and udp port to use
 		[client_id, udp_port, _] = extract_server_msg(data, features=0)
 
-	## 
-
 	print(client_id)
 	print(udp_port)
+
+	## The UDP protocol implementation
+
+	# Initialization 
+	EOM = False		# Initial state of the End of communication flag
+	content = "Hello from " + client_id		# First message to send
+	msg_length = len(content)
+
+	i=0 	# Used as key counter
+	while not EOM:
+		# If enc feature was used !
+		if feature_enc:
+			# Appending null characters to the content of the udp packet of needed
+			content = udp_packet_content_padding(content)
+			# Encrypt the message (we are using key zero to encrypt the content)
+			content = encrypt(content, key=private_keys[i])
+	
+		# Packet construction
+		packet = udp_packet_constructor(CID=client_id, 
+									ACK = True,
+									EOM = False,
+									data_remaining = 0,
+									content_length = msg_length, # only for testing !
+									content = content)
+	
+		# Once the packet is constructed, let's send it using UDP protocol
+		server_said = udp_connect(UDP_IP = TCP_IP, UDP_PORT=int(udp_port), packet = packet)
+
+		# unpacking the packet received from the server
+		CID, ACK, EOM, data_remaining, content_length, content = udp_packet_unpack(server_said)
+		print('content from server:\n'+content[0:content_length])
+		# Once we get the UDP packet unpacked, let's inverse the order of the content section
+		# Note that 'words' is free of null bytes padding
+		if not EOM:
+			# If ENC feature was enabled, we have to decrypt the content received from the server
+			if feature_enc:
+				content = decrypt(cypher=content, key=server_keys[i])
+
+			print('Decrypted content from server:\n'+content[0:content_length])
+			reversed_words = reverse_order(words= content[0:content_length])
+			print('reversed order words: \n' + reversed_words)
+			content = reversed_words
+			msg_length = len(reversed_words)
+			i+=1
+
 	'''
 	The following section is the test section
 	Please, when you deploy new functions try them in the section below
 	Once you make sure that everything runs as it should
 	write it above at its meaningful location
 	'''
-	########################## Testing enc-dec ###################
-	# It is working and ready to be used !
-	if feature_enc:
-		# some random message to encrypt (just for testing, it should be udp packet)
-		udp_packet_content = 'Hello from ' + client_id
-		# Appending null characters to the content of the udp packet of needed
-		upd_packet_content = udp_packet_content_padding(udp_packet_content)
-		
-		# Encrypt the message (we are using key zero to encrypt the content)
-		cypher = encrypt(upd_packet_content, key=private_keys[0])
-		
-		# Decryption of the cypher message
-		plain_text = decrypt(cypher, key=private_keys[0])
-	######### end of  Testing enc-dec ########################
 
 	#print("received data:", data)
 	print('\nDone\n')
