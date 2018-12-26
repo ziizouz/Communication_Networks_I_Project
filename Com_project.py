@@ -50,23 +50,27 @@ def embed_key_message(keys):
 	return MESSAGE
 
 '''
-extract_server_keys
+extract_server_msg
 Arguments:
 	data: (binary string) it should be the first binary string received from the server
+	features: (list of int) it should contain the features used by the user
 return:
 	client_id: (string) the client identification token specified by the server
 	udp_port: (string) udp port number on  the server
 	server_keys: (list) it contains server keys to be used to decryption
-Note that extract_server_keys decode the binary string received into ordinary ASCII string
+Note that extract_server_msg deco, features=0de the binary string received into ordinary ASCII string
 Then, it splits the string on (\r\n).
 the first element is split on (space) to extract the identification token and upd port number
 the last elmenents are discarded ('.') and ('') empty character
 '''
-def extract_server_keys(data):
+def extract_server_msg(data, features=0):
 	tmp = data.decode('ascii').split('\r\n')
 	[_, client_id, udp_port] = tmp[0].split(' ')		# First element of the server message is Hello identif udp_port
-	server_keys = tmp[1:-2]  # Keys are all the vector elements except the first (identif) last (.)
 	
+	if features == 1: # enc feature was used => let's get the keys
+		server_keys = tmp[1:-2]  # Keys are all the vector elements except the first (identif) last (.)
+	else:
+		server_keys = None
 	#print(tmp)
 	return client_id, udp_port, server_keys
 
@@ -169,46 +173,111 @@ def main():
 	except:
 		print('Please make sure to give correct IP address and PORT as command line arguments\n')
 		print('Correct invocation of the program:')
-		print('python3 Client_TCP <IP-ADDRESS> <PORT>')
+		print('python3 Com_project <IP-ADDRESS> <PORT>')
 		return
 
 
 	# Negociating extra features
 	print('You want to conenct to ' + str(TCP_IP) + ' using port : '+ str(TCP_PORT))
 	print('Please specify the features you want to use for this connection')
-	print('Please enter the corresponding number for each feature\nWhen you select all the features you want to use, please enter "q"')
-	print('1) Encryption\t2) Multipart\t3)Parity')
-	print('\n\n')
-	features = []
-	# Still needs some work above !!
-	#MESSAGE = "HELLO \r\n"
-	#MESSAGE = "HELLO ENC\r\n"
+	print('Please enter the corresponding number for each feature\nWhen you select all the features you want to use, please enter "e"')
+	print('To exit the progam, please enter "q"')
+	print('0) No features\t1) Encryption\t2) Multipart\t3)Parity')
+	## Getting user input
+	# Features are disables by default
+	feature_enc = False
+	feature_mul = False
+	feature_par = False
+
+	accepted_in = ['0', '1', '2', '3', 'q', 'e'] 	# Valid entries of the selection section above
+	while True:
+		tmp = input()		# Getting user input
+		if tmp in accepted_in:	# If user input is a valid entry
+			if tmp == 'q': # q ==> close program
+				return
+			elif tmp == 'e':	# User had gave all the features he wants to use
+				break
+			else:
+				if   tmp == '0':	# Don't use any feature
+					break
+				if   tmp == '1':
+					feature_enc = True
+				elif tmp == '2':
+					feature_mul = True
+				elif tmp == '3':
+					feature_par = True
+				else:
+					print('You are not supposed to see this message !')
+					return
+		else:
+			print('Please enter a valid entry !')
+
+	## The TCP protocol implemenation
+	'''
+	In this section, the program will negociate the features to use with the server
+	And it will get the client's identification token and UDP port
+	'''
+
+	# If encryption is not selected, this is the initial message is
+	MESSAGE = "HELLO \r\n"
 	
+
+
+	## If multipart is selected 
+	# do something to the message here!
+
+	## If Parity is selected
+	# do something here !
+
 	## If encryption feature is selected, generate keys and embed them into the message
 	# Generate keys
-	private_keys = generate_keys(key_size=64, nbr_of_keys=20)
+	if feature_enc:
+		private_keys = generate_keys(key_size=64, nbr_of_keys=20)
 
-	# Getting the ready-to-send-message
-	MESSAGE = embed_key_message(private_keys)
+		# Getting the ready-to-send-message
+		MESSAGE = embed_key_message(private_keys)
 
+
+	# At this point, the message to be sent to the server should be generated !
+	## Let's send the ready message to the server
 	# tcp_connect connects to the server and initializes the connection parameter
 	data = tcp_connect(TCP_IP, TCP_PORT, MESSAGE)
 
-	# Extracting server's keys from the initialization message ('To be used only if encryption is enabled')
-	[client_id, udp_port, server_keys] = extract_server_keys(data)
+	## The server returned 'data'. This 'data' should be manipulated according to user-specific selected features
+	# So far, only works for no features and feature_enc = True
+	# If enc feature was selected, we need the extract the server keys
+	if feature_enc:
+		# Extracting server's keys from the initialization message ('To be used only if encryption is enabled')
+		[client_id, udp_port, server_keys] = extract_server_msg(data, features=1)
+	else:
+		# Extract cliend id and udp port to use
+		[client_id, udp_port, _] = extract_server_msg(data, features=0)
 
-	# some random message to encrypt (just for testing, it should be udp packet)
-	udp_packet_content = 'Hello from ' + client_id
-	
-	# Appending null characters to the content of the udp packet of needed
-	upd_packet_content = udp_packet_content_padding(udp_packet_content)
-	
-	# Encrypt the message (we are using key zero to encrypt the content)
-	cypher = encrypt(upd_packet_content, key=private_keys[0])
-	
-	# Decryption of the cypher message
-	plain_text = decrypt(cypher, key=private_keys[0])
-	
+	## 
+
+	print(client_id)
+	print(udp_port)
+	'''
+	The following section is the test section
+	Please, when you deploy new functions try them in the section below
+	Once you make sure that everything runs as it should
+	write it above at its meaningful location
+	'''
+	########################## Testing enc-dec ###################
+	# It is working and ready to be used !
+	if feature_enc:
+		# some random message to encrypt (just for testing, it should be udp packet)
+		udp_packet_content = 'Hello from ' + client_id
+		# Appending null characters to the content of the udp packet of needed
+		upd_packet_content = udp_packet_content_padding(udp_packet_content)
+		
+		# Encrypt the message (we are using key zero to encrypt the content)
+		cypher = encrypt(upd_packet_content, key=private_keys[0])
+		
+		# Decryption of the cypher message
+		plain_text = decrypt(cypher, key=private_keys[0])
+	######### end of  Testing enc-dec ########################
+
 	#print("received data:", data)
 	print('\nDone\n')
 	
